@@ -1,4 +1,4 @@
-module gen
+module github.com/monoxane/gen
 
 go 1.19
 
