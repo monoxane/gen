@@ -67,7 +67,7 @@ func main() {
 		log.Printf("[gen/render/template] open markdown template")
 	}
 
-	renderDirectoryContents("content", "Oliver")
+	renderDirectoryContents("content", "gen")
 }
 
 func renderDirectoryContents(directory, parent string) {
