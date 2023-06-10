@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gomarkdown/markdown"
@@ -19,21 +21,41 @@ type page struct {
 	Path          string
 	OutPath       string
 	Name          string
+	Type          string
+	Backlinks     map[string]string
 	Content       template.HTML
 	Navigation    template.HTML
 	Footer        template.HTML
 	StaticImports template.HTML
 }
 
+func (p *page) Render() {
+	var result bytes.Buffer
+	footerTemplate.Execute(&result, p)
+
+	p.Footer = template.HTML(result.String())
+
+	switch p.Type {
+	case "HTML":
+		renderHtml(*p)
+	case "MD":
+		renderMd(*p)
+	}
+}
+
 var (
-	mdTemplate *template.Template
+	mdTemplate     *template.Template
+	footerTemplate *template.Template
+	reHref         regexp.Regexp
+	pages          map[string]*page = make(map[string]*page)
 )
 
 func NewPage(path, outPath, name string) (page, error) {
 	p := page{
-		Path:    path,
-		OutPath: outPath,
-		Name:    name,
+		Path:      path,
+		OutPath:   outPath,
+		Name:      name,
+		Backlinks: make(map[string]string, 0),
 	}
 
 	navigationPartial, err := os.ReadFile("template/navigation.html")
@@ -42,11 +64,11 @@ func NewPage(path, outPath, name string) (page, error) {
 	}
 	p.Navigation = template.HTML(navigationPartial)
 
-	footerPartial, err := os.ReadFile("template/footer.html")
-	if err != nil {
-		return page{}, fmt.Errorf("[gen/page/new] unable to open footer partial: %s", err)
-	}
-	p.Footer = template.HTML(footerPartial)
+	// footerPartial, err := os.ReadFile("template/footer.html")
+	// if err != nil {
+	// 	return page{}, fmt.Errorf("[gen/page/new] unable to open footer partial: %s", err)
+	// }
+	// p.Footer = template.HTML(footerPartial)
 
 	staticImportPatials, err := os.ReadFile("template/static.html")
 	if err != nil {
@@ -58,19 +80,56 @@ func NewPage(path, outPath, name string) (page, error) {
 }
 
 func main() {
+	reHref = *regexp.MustCompile(`<a\s+(?:[^>]*?\s+)?(?:href=")(\/.*?)(?:")`)
+
 	var err error
 	mdTemplate, err = template.ParseFiles("template/markdown.html")
 	if err != nil {
-		log.Printf("[gen/render/dir] unable to open markdown template: %s", err)
+		log.Printf("[gen/init/template] unable to open markdown template: %s", err)
 		return
 	} else {
-		log.Printf("[gen/render/template] open markdown template")
+		log.Printf("[gen/init/template] opened markdown template")
 	}
 
-	renderDirectoryContents("content", "Oliver")
+	footerTemplate, err = template.ParseFiles("template/footer.html")
+	if err != nil {
+		log.Printf("[gen/init/template] unable to open footer template: %s", err)
+		return
+	} else {
+		log.Printf("[gen/init/template] opened footer template")
+	}
+
+	parseDirectoryContent("content", "Oliver")
+
+	log.Printf("[gen/parse] parsed %d pages", len(pages))
+
+	for key, page := range pages {
+		if page.Type != "" {
+			log.Printf("[gen/parse/backlinks] parsing %s as %s", page.OutPath, key)
+			links := reHref.FindAllStringSubmatch(string(page.Content), -1)
+			for _, link := range links {
+				log.Printf("[gen/parse/backlinks] found link in %s: %s", page.OutPath, link[1])
+				p := fmt.Sprintf("public%s", link[1])
+				if targetPage, ok := pages[p]; ok {
+					targetPage.Backlinks[strings.Replace(page.OutPath, "public", "", 1)] = page.Name
+				} else {
+					p = fmt.Sprintf("public%s/index.html", link[1])
+					if targetPage, ok := pages[p]; ok {
+						targetPage.Backlinks[strings.Replace(page.OutPath, "public", "", 1)] = page.Name
+					} else {
+						log.Printf("[gen/parse/backlinks] unable to find page %s", p)
+					}
+				}
+			}
+		}
+	}
+
+	for _, page := range pages {
+		page.Render()
+	}
 }
 
-func renderDirectoryContents(directory, parent string) {
+func parseDirectoryContent(directory, parent string) {
 	inodes, err := os.ReadDir(directory)
 	if err != nil {
 		log.Fatal(err)
@@ -87,10 +146,10 @@ func renderDirectoryContents(directory, parent string) {
 		if inode.IsDir() {
 			err := os.MkdirAll(outPath, 0700)
 			if err != nil {
-				log.Printf("[gen/render/dir] unable to create directory %s: %s", outPath, err)
+				log.Printf("[gen/process/dir] unable to create directory %s: %s", outPath, err)
 				continue
 			} else {
-				log.Printf("[gen/render/dir] created directory %s", outPath)
+				log.Printf("[gen/process/dir] created directory %s", outPath)
 			}
 
 			childName := directory
@@ -98,12 +157,12 @@ func renderDirectoryContents(directory, parent string) {
 				childName = parent
 			}
 
-			renderDirectoryContents(path, childName)
+			parseDirectoryContent(path, childName)
 
 		} else {
 			s, err := os.ReadFile(path)
 			if err != nil {
-				log.Printf("[gen/render/source] unable to read source %s: %s", outPath, err)
+				log.Printf("[gen/parse/source] unable to read source %s: %s", outPath, err)
 				continue
 			}
 
@@ -119,15 +178,18 @@ func renderDirectoryContents(directory, parent string) {
 
 			switch filepath.Ext(inode.Name()) {
 			case ".html":
-				renderHtml(p)
+				p.Type = "HTML"
+
 			case ".md":
 				p.Content = markdown2html(s)
-				renderMd(p)
+				p.Type = "MD"
 
 			default:
-				log.Printf("[gen/render/file] copying %s", path)
+				log.Printf("[gen/process/file] copying %s", path)
 				copyFile(path, outPath)
 			}
+
+			pages[strings.Replace(p.OutPath, "/content", "", 1)] = &p
 		}
 	}
 }
