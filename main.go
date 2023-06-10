@@ -99,7 +99,7 @@ func main() {
 		log.Printf("[gen/init/template] opened footer template")
 	}
 
-	parseDirectoryContent("content", "Oliver")
+	parseDirectoryContent("content", "gen")
 
 	log.Printf("[gen/parse] parsed %d pages", len(pages))
 
