@@ -122,7 +122,6 @@ func main() {
 		if page.Type != "" {
 			log.Printf("[gen/parse/extlinks] parsing %s as %s", page.OutPath, key)
 			extLinks := reExtHref.FindAllStringSubmatch(string(page.Content), -1)
-			log.Printf("%#v\n%s", extLinks, string(page.Content))
 			for _, extLink := range extLinks {
 				externalLinks[extLink[1]] = extLink[1]
 			}
