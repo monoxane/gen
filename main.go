@@ -23,6 +23,8 @@ type page struct {
 	Name          string
 	Type          string
 	Backlinks     map[string]string
+	InternalLinks map[string]string
+	ExternalLinks map[string]string
 	Content       template.HTML
 	Navigation    template.HTML
 	Footer        template.HTML
@@ -44,10 +46,12 @@ func (p *page) Render() {
 }
 
 var (
-	mdTemplate     *template.Template
-	footerTemplate *template.Template
-	reHref         regexp.Regexp
-	pages          map[string]*page = make(map[string]*page)
+	mdTemplate      *template.Template
+	footerTemplate  *template.Template
+	sitemapTemplate *template.Template
+	reHref          regexp.Regexp
+	reExtHref       regexp.Regexp
+	pages           map[string]*page = make(map[string]*page)
 )
 
 func NewPage(path, outPath, name string) (page, error) {
@@ -81,6 +85,7 @@ func NewPage(path, outPath, name string) (page, error) {
 
 func main() {
 	reHref = *regexp.MustCompile(`<a\s+(?:[^>]*?\s+)?(?:href=")(\/.*?)(?:")`)
+	reExtHref = *regexp.MustCompile(`<a\s+(?:[^>]*?\s+)?(?:href=")(http.*?)(?:")`)
 
 	var err error
 	mdTemplate, err = template.ParseFiles("template/markdown.html")
@@ -99,12 +104,29 @@ func main() {
 		log.Printf("[gen/init/template] opened footer template")
 	}
 
+	sitemapTemplate, err = template.ParseFiles("template/sitemap.html")
+	if err != nil {
+		log.Printf("[gen/init/template] unable to open sitemap template: %s", err)
+		return
+	} else {
+		log.Printf("[gen/init/template] opened sitemap template")
+	}
+
 	parseDirectoryContent("content", "gen")
 
 	log.Printf("[gen/parse] parsed %d pages", len(pages))
 
+	externalLinks := make(map[string]string)
+
 	for key, page := range pages {
 		if page.Type != "" {
+			log.Printf("[gen/parse/extlinks] parsing %s as %s", page.OutPath, key)
+			extLinks := reExtHref.FindAllStringSubmatch(string(page.Content), -1)
+			log.Printf("%#v\n%s", extLinks, string(page.Content))
+			for _, extLink := range extLinks {
+				externalLinks[extLink[1]] = extLink[1]
+			}
+
 			log.Printf("[gen/parse/backlinks] parsing %s as %s", page.OutPath, key)
 			links := reHref.FindAllStringSubmatch(string(page.Content), -1)
 			for _, link := range links {
@@ -127,6 +149,25 @@ func main() {
 	for _, page := range pages {
 		page.Render()
 	}
+
+	internalLinks := make(map[string]string)
+
+	for _, page := range pages {
+		if page.Type != "" {
+			internalLinks[strings.Replace(page.OutPath, "public/", "", 1)] = strings.Replace(page.OutPath, "public/", "", 1)
+		}
+	}
+
+	sitemap, err := NewPage("content/sitemap.html", "public/sitemap.html", "Sitemap")
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	sitemap.InternalLinks = internalLinks
+	sitemap.ExternalLinks = externalLinks
+
+	renderSitemap(sitemap)
 }
 
 func parseDirectoryContent(directory, parent string) {
@@ -179,6 +220,7 @@ func parseDirectoryContent(directory, parent string) {
 			switch filepath.Ext(inode.Name()) {
 			case ".html":
 				p.Type = "HTML"
+				p.Content = template.HTML(s)
 
 			case ".md":
 				p.Content = markdown2html(s)
@@ -215,6 +257,22 @@ func renderMd(p page) {
 		return
 	} else {
 		err = mdTemplate.Execute(f, p)
+		if err != nil {
+			log.Printf("[gen/render/file] unable to render to file %s: %s", p.OutPath, err)
+			return
+		} else {
+			log.Printf("[gen/render/file] rendered file %s", p.OutPath)
+		}
+	}
+}
+
+func renderSitemap(p page) {
+	f, err := os.Create(p.OutPath)
+	if err != nil {
+		log.Printf("[gen/render/file] unable to create file %s: %s", p.OutPath, err)
+		return
+	} else {
+		err = sitemapTemplate.Execute(f, p)
 		if err != nil {
 			log.Printf("[gen/render/file] unable to render to file %s: %s", p.OutPath, err)
 			return
